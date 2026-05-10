@@ -1,7 +1,7 @@
 [project]
 name = "powerline-claude-code"
-version = "0.0.1"
-description = "Powerline segment that highlights tmux windows where Claude Code is waiting on you."
+version = "0.0.2"
+description = "Powerline segments for Claude Code: tmux attention indicator + rolling token usage."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = []
