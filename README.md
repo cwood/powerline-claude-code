@@ -1,9 +1,13 @@
 # powerline-claude-code
 
-A [Powerline](https://powerline.readthedocs.io) segment that highlights tmux
-windows where [Claude Code](https://claude.com/claude-code) is waiting for you
-— either because it finished a turn or because it's blocked on a permission
-prompt.
+[Powerline](https://powerline.readthedocs.io) segments for
+[Claude Code](https://claude.com/claude-code):
+
+- `attention` — highlights tmux windows where Claude Code is waiting for you
+  (finished a turn, blocked on a permission prompt, etc.)
+- `usage` — rolling token usage over configurable windows (default 5m / 30m /
+  1h), with automatic spike highlight when the short window exceeds the long
+  window baseline by 2× (configurable)
 
 ## How it works
 
@@ -68,14 +72,39 @@ by post-processing if you prefer — open an issue if you want a built-in flag):
 }
 ```
 
+## Usage segment
+
+```json
+{ "function": "powerline_claude_code.usage", "priority": 25 }
+```
+
+| Arg          | Default        | Meaning |
+| ------------ | -------------- | ------- |
+| `windows`    | `[5, 30, 60]`  | Minute windows to display. First = short (spike numerator), last = long (spike denominator). |
+| `spike_ratio`| `2.0`          | Trigger spike highlight when short rate / long rate > this. |
+| `glyph`      | `Σ`            | Prefix icon. |
+| `show_zero`  | `false`        | Render with all-zero windows when no usage detected. |
+
+Reads `~/.claude/projects/*.jsonl` and sums `input_tokens + output_tokens +
+cache_creation_input_tokens + cache_read_input_tokens` from `type:"assistant"`
+records. Per-file results are mtime-cached at
+`~/.cache/powerline-claude-code/usage.json` so repeated status refreshes are
+cheap.
+
+> **Note:** including `cache_read_input_tokens` makes the absolute numbers
+> large during long-context sessions (cache reads are billed at ~10% but are
+> the dominant token type by volume). The 5m/30m/1h *ratios* are still the
+> useful signal for "am I burning more than usual?".
+
 ## Highlight groups
 
-The segment emits these groups (define them in your colorscheme):
+Define these in your tmux colorscheme:
 
-- `claude_code:attention`
-- `warning` (fallback)
-- `background` (fallback)
+- `claude_code:attention` — windows-need-attention indicator
+- `claude_code:usage` — normal usage segment
+- `claude_code:usage_spike` — usage segment in spike state
 - `claude_code:divider`
+- Fallbacks used: `warning`, `information:additional`, `background`
 
 ## Uninstall
 
