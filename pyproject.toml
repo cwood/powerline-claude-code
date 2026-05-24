@@ -1,20 +1,27 @@
 [build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
 
 [project]
 name = "powerline-claude-code"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Powerline segments for Claude Code: subscription quota + tmux attention indicator."
-readme = "README.md"
-requires-python = ">=3.9"
+readme = {file = "README.mkd", content-type = "text/markdown"}
+requires-python = ">=3.10"
 dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [project.scripts]
 powerline-claude-code = "powerline_claude_code.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/cwood/powerline-claude-code"
+Repository = "https://github.com/cwood/powerline-claude-code"
 
-[tool.setuptools]
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.targets.wheel]
 packages = ["powerline_claude_code"]
