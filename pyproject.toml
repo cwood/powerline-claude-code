@@ -1,10 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "powerline-claude-code"
-version = "0.0.2"
-description = "Powerline segments for Claude Code: tmux attention indicator + rolling token usage."
+version = "0.1.0"
+description = "Powerline segments for Claude Code: subscription quota + tmux attention indicator."
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = []
 
+[project.scripts]
+powerline-claude-code = "powerline_claude_code.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/cwood/powerline-claude-code"
+
+[tool.setuptools]
+packages = ["powerline_claude_code"]
