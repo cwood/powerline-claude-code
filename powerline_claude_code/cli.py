@@ -23,8 +23,14 @@ from . import segments as S
 # (underscore = current `-m` form, hyphen = the retired bash installer).
 _MARKERS = ("powerline_claude_code", "powerline-claude-code")
 
-# Hook event -> the `hook` subcommand it should run.
-_HOOK_EVENTS = {"Notification": "notification", "Stop": "stop", "UserPromptSubmit": "clear"}
+# Hook event -> the `hook` subcommand it should run. SessionEnd clears the flag
+# when Claude exits, so a finished session doesn't linger until the next prompt.
+_HOOK_EVENTS = {
+    "Notification": "notification",
+    "Stop": "stop",
+    "UserPromptSubmit": "clear",
+    "SessionEnd": "clear",
+}
 
 # Keep enough 5h snapshots to derive a burn rate; trims oldest beyond this.
 _HISTORY_MAX = 120

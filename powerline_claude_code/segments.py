@@ -90,8 +90,14 @@ def _fmt_tokens(n: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_panes() -> dict[str, dict[str, str]]:
-    """Map tmux pane_id -> {session, window, window_name} for every live pane."""
+def _read_panes() -> dict[str, dict]:
+    """Map tmux pane_id -> pane info for every live pane.
+
+    ``active``/``attached`` together identify the window currently on screen
+    (active window of a session a client is attached to); ``created`` is the
+    session's creation epoch, used to prune flags left over from before a
+    tmux server restart.
+    """
     try:
         out = subprocess.run(
             [
@@ -99,7 +105,8 @@ def _read_panes() -> dict[str, dict[str, str]]:
                 "list-panes",
                 "-a",
                 "-F",
-                "#{pane_id}\t#{session_name}\t#{window_index}\t#{window_name}",
+                "#{pane_id}\t#{session_name}\t#{window_index}\t#{window_name}"
+                "\t#{window_active}\t#{session_attached}\t#{session_created}",
             ],
             capture_output=True,
             text=True,
@@ -109,14 +116,17 @@ def _read_panes() -> dict[str, dict[str, str]]:
     except (subprocess.SubprocessError, FileNotFoundError):
         return {}
 
-    panes: dict[str, dict[str, str]] = {}
+    panes: dict[str, dict] = {}
     for line in out.splitlines():
         parts = line.split("\t")
-        if len(parts) == 4:
+        if len(parts) == 7:
             panes[parts[0]] = {
                 "session": parts[1],
                 "window": parts[2],
                 "window_name": parts[3],
+                "active": parts[4] == "1",
+                "attached": int(parts[5]) if parts[5].isdigit() else 0,
+                "created": int(parts[6]) if parts[6].isdigit() else 0,
             }
     return panes
 
@@ -139,9 +149,8 @@ def _label(pane: dict[str, str], label_format: str) -> str:
 def _flag_meta() -> dict[str, dict]:
     """Pane id -> {reason, ts} for every attention flag on disk.
 
-    Flag files are JSON written by the hook CLI; an empty or unparseable file
-    (e.g. a leftover from an older version) degrades to a generic permission
-    flag rather than vanishing.
+    Our hook writes JSON atomically, so empty or unparseable files (e.g.
+    leftovers from the old touch-based hook) are ignored rather than shown.
     """
     if not ATTENTION_DIR.is_dir():
         return {}
@@ -151,18 +160,13 @@ def _flag_meta() -> dict[str, dict]:
             continue
         try:
             mtime = p.stat().st_mtime
-        except OSError:
-            continue
-        meta = {"reason": "permission", "ts": mtime}
-        try:
             txt = p.read_text().strip()
-            if txt:
-                d = json.loads(txt)
-                meta["reason"] = d.get("reason") or meta["reason"]
-                meta["ts"] = d.get("ts") or mtime
+            meta = json.loads(txt) if txt else None
         except (OSError, json.JSONDecodeError):
-            pass
-        flags[p.name] = meta
+            meta = None
+        if not isinstance(meta, dict):
+            continue
+        flags[p.name] = {"reason": meta.get("reason") or "permission", "ts": meta.get("ts") or mtime}
     return flags
 
 
@@ -173,15 +177,19 @@ def _attention_part(
     show_count: bool,
     label_format: str,
     pulse: bool,
+    attached_only: bool = True,
 ) -> dict | None:
     flags = _flag_meta()
     if not flags:
         return None
 
     live = _read_panes()
-    # Drop flags for panes that no longer exist, deleting the stale file.
+    # Prune flags whose pane is gone, or that predate the current tmux server
+    # (pane ids reset on restart, so an old %0 file would shadow a new %0).
+    server_start = min((info["created"] for info in live.values()), default=0)
     for pane in list(flags):
-        if pane not in live:
+        orphan = pane not in live or (server_start and flags[pane]["ts"] < server_start)
+        if orphan:
             try:
                 (ATTENTION_DIR / pane).unlink(missing_ok=True)
             except OSError:
@@ -190,10 +198,20 @@ def _attention_part(
     if not flags:
         return None
 
+    if attached_only:
+        # Only the session(s) you're currently in — ignore detached sessions.
+        flags = {p: m for p, m in flags.items() if live.get(p, {}).get("attached")}
+        if not flags:
+            return None
+
     if not show_self:
+        # Hide whatever's on screen: the active window of any attached session,
+        # plus $TMUX_PANE when powerline happens to have it.
+        drop = {p for p, info in live.items() if info["active"] and info["attached"]}
         me = _current_pane_id()
         if me:
-            flags.pop(me, None)
+            drop.add(me)
+        flags = {p: m for p, m in flags.items() if p not in drop}
         if not flags:
             return None
 
@@ -471,6 +489,7 @@ def status(
     pulse: bool = False,
     show_self: bool = False,
     show_count: bool = True,
+    attached_only: bool = True,
     label_format: str = "{session}:{window_name}",
     done_glyph: str = "✓",
     permission_glyph: str = "⚠",
@@ -491,6 +510,8 @@ def status(
             second so the segment throbs even on terminals that ignore blink.
         show_self: include the current pane among waiting windows.
         show_count: append ``(n/total)`` when more than one window waits.
+        attached_only: only alert for windows in a session you're attached to;
+            ignore detached sessions (default True).
         label_format: ``str.format`` template over ``session``, ``window``
             (index) and ``window_name``.
         base: what to show when nothing needs attention — ``"quota"`` or
@@ -499,7 +520,7 @@ def status(
     """
     glyphs = {"done": done_glyph, "permission": permission_glyph, "idle": idle_glyph}
     part = _attention_part(
-        cycle_seconds, glyphs, show_self, show_count, label_format, pulse
+        cycle_seconds, glyphs, show_self, show_count, label_format, pulse, attached_only
     )
     if part:
         return [part]
@@ -531,6 +552,7 @@ def attention(
     pulse: bool = False,
     show_self: bool = False,
     show_count: bool = True,
+    attached_only: bool = True,
     label_format: str = "{session}:{window_name}",
     done_glyph: str = "✓",
     permission_glyph: str = "⚠",
@@ -539,7 +561,7 @@ def attention(
     """Cycling indicator for tmux windows where Claude Code is waiting on you."""
     glyphs = {"done": done_glyph, "permission": permission_glyph, "idle": idle_glyph}
     part = _attention_part(
-        cycle_seconds, glyphs, show_self, show_count, label_format, pulse
+        cycle_seconds, glyphs, show_self, show_count, label_format, pulse, attached_only
     )
     return [part] if part else None
 

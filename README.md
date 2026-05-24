@@ -64,6 +64,7 @@ Add one segment to your powerline tmux theme JSON:
 | `pulse` | `false` | Alternate `<group>`/`<group>_pulse` each second so it throbs (works where terminal blink doesn't). Pair with `set -g status-interval 1`. |
 | `show_self` | `false` | Include the pane you're already in. |
 | `show_count` | `true` | Append `(n/total)` when several windows wait. |
+| `attached_only` | `true` | Only alert for windows in a session you're attached to; ignore detached tmux sessions. |
 | `label_format` | `{session}:{window_name}` | `str.format` over `session`, `window` (index), `window_name`. |
 | `done_glyph` / `permission_glyph` / `idle_glyph` | `✓` / `⚠` / `⏾` | Per-reason glyphs. |
 | `quota_glyph` | `◧` | Quota prefix. |

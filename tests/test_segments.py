@@ -106,16 +106,26 @@ class QuotaTests(unittest.TestCase):
                 self.assertIsNone(S._quota_part("◧", False, True, True, 70.0, 90.0, 1800))
 
 
+GLYPHS = {"done": "✓", "permission": "⚠", "idle": "⏾"}
+
+
+def _pane(session, window_name, window="1", active=False, attached=1, created=0):
+    return {
+        "session": session,
+        "window": window,
+        "window_name": window_name,
+        "active": active,
+        "attached": attached,
+        "created": created,
+    }
+
+
 class AttentionTests(unittest.TestCase):
     def _flag(self, d, pane, reason, ts):
         (Path(d) / pane).write_text(json.dumps({"reason": reason, "ts": ts}))
 
     def test_render_cycle_glyph_label(self):
-        glyphs = {"done": "✓", "permission": "⚠", "idle": "⏾"}
-        live = {
-            "%1": {"session": "0", "window": "1", "window_name": "nvim"},
-            "%2": {"session": "work", "window": "3", "window_name": "docs"},
-        }
+        live = {"%1": _pane("0", "nvim"), "%2": _pane("work", "docs", window="3")}
         with TemporaryDirectory() as d:
             self._flag(d, "%1", "done", 100)
             self._flag(d, "%2", "permission", 50)
@@ -125,16 +135,12 @@ class AttentionTests(unittest.TestCase):
                 S, "_now", return_value=0.0
             ):
                 # idx = (0 // 4) % 2 = 0 -> freshest (%1, done).
-                part = S._attention_part(4, glyphs, False, True, "{session}:{window_name}", False)
+                part = S._attention_part(4, GLYPHS, False, True, "{session}:{window_name}", False)
         self.assertEqual(part["contents"], "✓ 0:nvim (1/2)")
         self.assertEqual(part["highlight_groups"][0], "claude_code:attention_done")
 
     def test_cycle_advances(self):
-        glyphs = {"done": "✓", "permission": "⚠", "idle": "⏾"}
-        live = {
-            "%1": {"session": "0", "window": "1", "window_name": "nvim"},
-            "%2": {"session": "work", "window": "3", "window_name": "docs"},
-        }
+        live = {"%1": _pane("0", "nvim"), "%2": _pane("work", "docs", window="3")}
         with TemporaryDirectory() as d:
             self._flag(d, "%1", "done", 100)
             self._flag(d, "%2", "permission", 50)
@@ -143,12 +149,11 @@ class AttentionTests(unittest.TestCase):
             ), mock.patch.object(S, "_current_pane_id", return_value=None), mock.patch.object(
                 S, "_now", return_value=4.0
             ):
-                part = S._attention_part(4, glyphs, False, True, "{session}:{window_name}", False)
+                part = S._attention_part(4, GLYPHS, False, True, "{session}:{window_name}", False)
         self.assertEqual(part["contents"], "⚠ work:docs (2/2)")
 
     def test_pulse_group(self):
-        glyphs = {"done": "✓", "permission": "⚠", "idle": "⏾"}
-        live = {"%1": {"session": "0", "window": "1", "window_name": "nvim"}}
+        live = {"%1": _pane("0", "nvim")}
         with TemporaryDirectory() as d:
             self._flag(d, "%1", "permission", 100)
             with mock.patch.object(S, "ATTENTION_DIR", Path(d)), mock.patch.object(
@@ -156,31 +161,79 @@ class AttentionTests(unittest.TestCase):
             ), mock.patch.object(S, "_current_pane_id", return_value=None), mock.patch.object(
                 S, "_now", return_value=0.0
             ):
-                part = S._attention_part(4, glyphs, False, True, "{window_name}", True)
+                part = S._attention_part(4, GLYPHS, False, True, "{window_name}", True)
         self.assertEqual(part["highlight_groups"][0], "claude_code:attention_permission_pulse")
 
     def test_stale_flag_removed(self):
-        glyphs = {"done": "✓", "permission": "⚠", "idle": "⏾"}
         with TemporaryDirectory() as d:
             self._flag(d, "%9", "done", 100)  # pane not in live
             with mock.patch.object(S, "ATTENTION_DIR", Path(d)), mock.patch.object(
                 S, "_read_panes", return_value={}
             ), mock.patch.object(S, "_current_pane_id", return_value=None):
-                part = S._attention_part(4, glyphs, False, True, "{window_name}", False)
+                part = S._attention_part(4, GLYPHS, False, True, "{window_name}", False)
             self.assertIsNone(part)
             self.assertFalse((Path(d) / "%9").exists())
 
-    def test_self_excluded(self):
-        glyphs = {"done": "✓", "permission": "⚠", "idle": "⏾"}
-        live = {"%1": {"session": "0", "window": "1", "window_name": "nvim"}}
+    def test_self_excluded_via_env(self):
+        live = {"%1": _pane("0", "nvim")}
         with TemporaryDirectory() as d:
             self._flag(d, "%1", "done", 100)
             with mock.patch.object(S, "ATTENTION_DIR", Path(d)), mock.patch.object(
                 S, "_read_panes", return_value=live
             ), mock.patch.object(S, "_current_pane_id", return_value="%1"):
                 self.assertIsNone(
-                    S._attention_part(4, glyphs, False, True, "{window_name}", False)
+                    S._attention_part(4, GLYPHS, False, True, "{window_name}", False)
                 )
+
+    def test_active_attached_window_excluded(self):
+        # The window on screen (active + attached) is hidden even without $TMUX_PANE.
+        live = {"%1": _pane("0", "nvim", active=True, attached=1)}
+        with TemporaryDirectory() as d:
+            self._flag(d, "%1", "done", 100)
+            with mock.patch.object(S, "ATTENTION_DIR", Path(d)), mock.patch.object(
+                S, "_read_panes", return_value=live
+            ), mock.patch.object(S, "_current_pane_id", return_value=None):
+                self.assertIsNone(
+                    S._attention_part(4, GLYPHS, False, True, "{window_name}", False)
+                )
+
+    def test_detached_session_filtered_by_default(self):
+        # attached_only defaults True: detached sessions are ignored.
+        live = {"%1": _pane("0", "nvim", attached=0)}
+        with TemporaryDirectory() as d:
+            self._flag(d, "%1", "permission", 100)
+            with mock.patch.object(S, "ATTENTION_DIR", Path(d)), mock.patch.object(
+                S, "_read_panes", return_value=live
+            ), mock.patch.object(S, "_current_pane_id", return_value=None):
+                self.assertIsNone(
+                    S._attention_part(4, GLYPHS, False, True, "{window_name}", False)
+                )
+
+    def test_detached_shown_when_attached_only_false(self):
+        live = {"%1": _pane("0", "nvim", attached=0)}
+        with TemporaryDirectory() as d:
+            self._flag(d, "%1", "permission", 100)
+            with mock.patch.object(S, "ATTENTION_DIR", Path(d)), mock.patch.object(
+                S, "_read_panes", return_value=live
+            ), mock.patch.object(S, "_current_pane_id", return_value=None), mock.patch.object(
+                S, "_now", return_value=0.0
+            ):
+                part = S._attention_part(
+                    4, GLYPHS, False, True, "{window_name}", False, attached_only=False
+                )
+        self.assertEqual(part["contents"], "⚠ nvim")
+
+    def test_prerestart_flag_pruned(self):
+        # Flag written before the tmux server started shadows a reused pane id.
+        live = {"%1": _pane("0", "nvim", created=2000)}
+        with TemporaryDirectory() as d:
+            self._flag(d, "%1", "done", 1000)  # ts < server_start (2000)
+            with mock.patch.object(S, "ATTENTION_DIR", Path(d)), mock.patch.object(
+                S, "_read_panes", return_value=live
+            ), mock.patch.object(S, "_current_pane_id", return_value=None):
+                part = S._attention_part(4, GLYPHS, False, True, "{window_name}", False)
+            self.assertIsNone(part)
+            self.assertFalse((Path(d) / "%1").exists())
 
 
 if __name__ == "__main__":
